@@ -27,10 +27,10 @@ def describe_exit(code: int) -> None:
     print(f"Exit code {code}: {EXIT_CODES[code]}", file=sys.stderr)
 
 # --- LIMITS & ERRORS ---
-# Every step is exactly one model call (also a failed one). 
-# After MAX_STEPS the run ends as an error, so that the agent doesn´t get stuck in an endless loop.
+# Every step is exactly one model call (also a failed one).
+# After MAX_STEPS the run ends as an error, so that the agent doesn't get stuck in an endless loop.
 MAX_STEPS = 8
-# Only wait for MAX_WAIRS_S after a rate limit (because the free tier limit is: 8,000 tokens per minute).
+# Only wait for MAX_WAIT_S after a rate limit (because the free tier limit is: 8,000 tokens per minute).
 MAX_WAIT_S = 30
 # Catch fatal errors that a retry cannot fix (wrong key, wrong model, no access), so that the run ends immediately.
 FATAL_ERRORS = (openai.AuthenticationError, openai.PermissionDeniedError, openai.NotFoundError)
@@ -52,9 +52,9 @@ if missing:
 # Initialize the model and API client.
 MODEL = os.environ["MODEL"]
 DATA_BASE_URL = os.environ["DATA_BASE_URL"].rstrip("/")
-# Setting max_retries=0, so that the agent doesn´t retry silently. Retries should only occure 
-# in the loop, so that every attempt can be count as a step and is visible in the log.
-# Setting timeout=60, so that the Agent only waits for 60 seconds for an answer of the model server.
+# Setting max_retries=0, so that the agent doesn't retry silently. Retries should only occur
+# in the loop, so that every attempt is counted as a step and is visible in the log.
+# Setting timeout=60, so that the agent only waits for 60 seconds for an answer of the model server.
 client = OpenAI(
     base_url=os.environ["OPENAI_BASE_URL"],
     api_key=os.environ["OPENAI_API_KEY"],
@@ -132,15 +132,15 @@ def get_calendar_day(date: str) -> dict:
                     "note": "There is no calendar data for this day."}
         raise
 
-# Link the python function and the according tool 
+# Link the Python function and the corresponding tool.
 TOOL_FUNCTIONS = {"get_calendar_day": get_calendar_day}
 
 
 # --- THE AGENT ---
-# Catch and log the errors within a agent run
+# Catch and log the errors within an agent run
 class AgentError(Exception):
-    """An error that ends the whole run on purpose. 
-              
+    """An error that ends the whole run on purpose.
+
     max_steps           The loop in run() used up all MAX_STEPS steps without
                         getting an answer e.g. the model kept calling tools.
 
@@ -156,27 +156,27 @@ class AgentError(Exception):
         self.reason = reason  # max_steps | fatal_model_error (why)
         self.steps = steps  # how many steps were used
 
-# Perfome one call to the model
+# Perform one call to the model
 def call_model(messages: list, step: int):
     """Performs one step of the agent, which is exactly one call to the language model.
 
-    Therefor the whole conversation (`messages`) is sent to the model together with the tool
+    Therefore the whole conversation (`messages`) is sent to the model together with the tool
     descriptions. The model then either requests tool calls or answers with text.
 
     There are three possible outcomes:
 
-    1. Success: returns the model's message. It contains either tool calls ( executed in run())
-                or a final text answer ( so the run ends successfully in run()).
+    1. Success: returns the model's message. It contains either tool calls (executed in run())
+                or a final text answer (so the run ends successfully in run()).
 
     2. The step failed and the run goes on: returns None. run() simply starts the next step with the same
        messages, so this is a retry. Each failed attempt still uses up one step, so MAX_STEPS
        stays a hard limit. This should cover:
          - RateLimitError (429): the token budget is used up. We wait as long as the server asks in the 
                                  "retry-after" header (min. 10s and max. MAX_WAIT_S).
-         - Other API errors: e.g (400) "tool_use_failed" or (500/503) "server problem". Here the agent waits 1 s.
+         - Other API errors: e.g. (400) "tool_use_failed" or (500/503) "server problem". Here the agent waits 1 s.
          - APIConnectionError / APITimeoutError: no connection, or no response within the client's
-           timeout (60 s). Here the agent wait 1 s.
-         - An empty answer: no tool calls and no text. Here the agent doesn´t wait. 
+           timeout (60 s). Here the agent waits 1 s.
+         - An empty answer: no tool calls and no text. Here the agent doesn't wait.
        Each case is logged as an event "model_error" with ok=false, the step number and the error.
 
     3. Run cannot go on: this raises an AgentError("fatal_model_error"). This happens for FATAL_ERRORS, 
@@ -217,7 +217,7 @@ def call_model(messages: list, step: int):
         return None
     return msg
 
-# Execute one requestet tool call 
+# Execute one requested tool call
 def execute_tool(tc, step: int) -> dict:
     """Execute one tool call requested by the model and return its result as a dict.
 
@@ -239,7 +239,7 @@ def execute_tool(tc, step: int) -> dict:
             error=f"Invalid arguments: {e}")
         return {"error": f"Invalid arguments, expected a JSON object: {e}"}
 
-    # Check if the called tool exist in the defined tools. If not: show the currently available tools.
+    # Check if the called tool exists in the defined tools. If not: show the currently available tools.
     if name not in TOOL_FUNCTIONS:
         log("tool_call", ok=False, tool=name, args=args, step=step, error="Unknown tool")
         return {"error": f"Unknown tool '{name}'. Available: {', '.join(TOOL_FUNCTIONS)}"}
@@ -328,11 +328,11 @@ def run(task: str) -> str:
 
 # Define how the program starts from the command line.
 def main() -> int:
-    # Make sure to always print in UTF-8, becaus the Windows console would otherwise fail on characters like ' '.
+    # Make sure to always print in UTF-8, because the Windows console would otherwise fail on characters like ' '.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-    # Check whether a question has been provided. 
+    # Check whether a question has been provided.
     if len(sys.argv) < 2:
         print(
             "No question given. Start the agent with your question in quotes, "
@@ -361,7 +361,7 @@ def main() -> int:
 # Ensure, that main() is automatically executed only when the file is launched directly (entry point).
 if __name__ == "__main__":
     exit_code = main()
-    # Only describe if ther are errors, not if it was a successful run.
+    # Only describe if there are errors, not if it was a successful run.
     if exit_code != 0:
         describe_exit(exit_code)
     sys.exit(exit_code)
