@@ -110,30 +110,194 @@ TOOLS = [
                 "required": ["date"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": (
+                "Reads the weather forecast for one city on one day: temperature (temp_c), "
+                "condition (in German, e.g. 'Regen' = rain, 'Schauer' = showers), "
+                "rain_probability (0 to 1) and wind_kmh. "
+                "Call it for questions about weather, rain, umbrella or clothing. "
+                "For a trip, use the destination city. "
+                "If there is no forecast for that city and day, the result has found=false."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "City name, e.g. 'ulm' or 'muenchen' (Munich).",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date in the format YYYY-MM-DD, e.g. 2026-10-29.",
+                    },
+                },
+                "required": ["city", "date"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_train_connections",
+            "description": (
+                "Reads the train connections from one city to another on one day. Each connection "
+                "has departure, arrival, changes, train and price_eur. "
+                "Call it for questions about how to travel somewhere, trains or departure times. "
+                "If there are no connections for that route and day, the result has found=false."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_city": {
+                        "type": "string",
+                        "description": "Departure city, e.g. 'ulm'. If the user does not say, use 'ulm'.",
+                    },
+                    "to_city": {
+                        "type": "string",
+                        "description": "Destination city, e.g. 'muenchen' (Munich).",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Date in the format YYYY-MM-DD, e.g. 2026-10-29.",
+                    },
+                },
+                "required": ["from_city", "to_city", "date"],
+            },
+        },
+    },
 ]
+
+
+def check_date(value: str) -> None:
+    """Raise a ValueError if the date does not match the pattern YYYY-MM-DD or does not exist (e.g. 2026-02-31)."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError(f"Invalid date '{value}', expected YYYY-MM-DD")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"The date '{value}' does not exist in the calendar. "
+                         "Tell the user and do not replace it with another date.") from None
+
+
+# Different spellings of the cities in the data. Everything else is only lower-cased and transliterated.
+CITY_ALIASES = {"munich": "muenchen", "munchen": "muenchen", "monaco di baviera": "muenchen"}
+
+
+def city_slug(city: str) -> str:
+    """Turn a city name like 'München' or 'Munich' into the short form used in the data ('muenchen')."""
+    slug = city.strip().lower()
+    slug = CITY_ALIASES.get(slug, slug)
+    for umlaut, replacement in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        slug = slug.replace(umlaut, replacement)
+    # Only letters are allowed, so that the city cannot change the URL path.
+    if not re.fullmatch(r"[a-z]+", slug):
+        raise ValueError(f"Invalid city '{city}', expected a city name like 'ulm' or 'muenchen'")
+    return slug
+
+
+def fetch_data(path: str):
+    """Download one JSON file from the data service.
+
+    Returns the parsed JSON, or None if the file does not exist. In the data service,
+    HTTP 404 means "no data for this day/place" (see the README of the data repository),
+    so it is a normal result and not an error. Every other HTTP error is raised.
+    """
+    try:
+        with urllib.request.urlopen(f"{DATA_BASE_URL}/{path}", timeout=15) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
 
 
 def get_calendar_day(date: str) -> dict:
     """Fetch the appointments of one day from the calendar data service."""
-    # Check whether the date matches the required pattern YYYY-MM-DD and construct the corresponding URL.
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
-        raise ValueError(f"Invalid date '{date}', expected YYYY-MM-DD")
-    url = f"{DATA_BASE_URL}/calendar/{date}.json"
+    check_date(date)
+    data = fetch_data(f"calendar/{date}.json")
+    if data is None:
+        # Every day of the data period has a calendar file (a free day has an empty list),
+        # so a missing file means the day is outside the period, not that the day is free.
+        return {"date": date, "found": False, "data": None,
+                "note": "There is no calendar data for this day. It is unknown whether there are "
+                        "appointments, so do not say that the day is free."}
+    return {"date": date, "found": True, "data": data}
 
-    # Try to download the JSON file for that day and return its content.
-    # If the file is missing, the date is treated as a day without data.
-    try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            return {"date": date, "found": True, "data": json.load(resp)}
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {"date": date, "found": False, "data": None,
-                    "note": "There is no calendar data for this day."}
-        raise
 
-# Link the Python function and the corresponding tool.
-TOOL_FUNCTIONS = {"get_calendar_day": get_calendar_day}
+def get_weather(city: str, date: str) -> dict:
+    """Fetch the weather forecast of one city on one day."""
+    check_date(date)
+    slug = city_slug(city)
+    data = fetch_data(f"weather/{slug}/{date}.json")
+    if data is None:
+        return {"city": slug, "date": date, "found": False, "data": None,
+                "note": "There is no weather forecast for this city and day. Do not guess the weather."}
+    return {"city": slug, "date": date, "found": True, "data": data}
+
+
+def get_train_connections(from_city: str, to_city: str, date: str) -> dict:
+    """Fetch the train connections between two cities on one day."""
+    check_date(date)
+    origin, destination = city_slug(from_city), city_slug(to_city)
+    data = fetch_data(f"transit/{origin}/{destination}/{date}.json")
+    if data is None:
+        return {"from": origin, "to": destination, "date": date, "found": False, "data": None,
+                "note": "There are no train connections for this route and day. Do not make up trains or times."}
+    return {"from": origin, "to": destination, "date": date, "found": True, "data": data}
+
+
+# Link the Python functions and the corresponding tools.
+TOOL_FUNCTIONS = {
+    "get_calendar_day": get_calendar_day,
+    "get_weather": get_weather,
+    "get_train_connections": get_train_connections,
+}
+
+
+# --- LANGUAGE ---
+# The data is in German, so a small model tends to answer in German even when the question is in English.
+# Therefore the language of the question is detected in code, and a fixed sentence is sent as the very last
+# message of every model call. 
+GERMAN_WORDS = {
+    "ich", "du", "mich", "mir", "mein", "meine", "meinen", "der", "die", "das", "den", "dem", "und", "oder",
+    "ist", "sind", "bin", "wie", "was", "wann", "wo", "wohin", "welche", "welcher", "welches", "habe", "hast",
+    "hat", "komme", "kommen", "nach", "nicht", "kein", "keine", "gibt", "es", "zum", "zur", "vom", "bei",
+    "mit", "für", "ob", "brauche", "brauchen", "steht", "heute", "morgen", "übermorgen", "wetter", "zug",
+    "termine", "termin", "kalender", "regenschirm", "verbindung", "verbindungen", "fahren", "einen", "eine",
+    "ein", "auf", "noch", "dort", "wird", "vergleiche", "tag", "tagen", "mehr", "freie", "zeit",
+}
+ENGLISH_WORDS = {
+    "i", "you", "me", "my", "the", "and", "or", "is", "are", "how", "what", "when", "where", "which", "do",
+    "does", "did", "have", "has", "get", "go", "to", "on", "of", "for", "with", "there", "need", "any",
+    "not", "no", "today", "tomorrow", "weather", "train", "trains", "calendar", "appointments", "appointment",
+    "umbrella", "connection", "connections", "compare", "day", "days", "more", "free", "time", "it", "will",
+    "should", "can", "a", "s",
+}
+LANGUAGE_HINTS = {
+    "de": "Antworte ausschließlich auf Deutsch.",
+    "en": "Answer only in English. Translate German titles and weather conditions from the data into English.",
+}
+
+
+def detect_language(text: str):
+    """Return 'de' or 'en' for the language of the question, or None if it is unclear.
+
+    Counts how many words of the text belong to each word list. Umlauts and ß count as German.
+    If both counts are equal (e.g. a question with only a date), the result is None and only
+    the general language rule in the system prompt applies.
+    """
+    words = re.findall(r"[a-zäöüß]+", text.lower())
+    german = sum(w in GERMAN_WORDS for w in words) + len(re.findall(r"[äöüß]", text.lower()))
+    english = sum(w in ENGLISH_WORDS for w in words)
+    if german > english:
+        return "de"
+    if english > german:
+        return "en"
+    return None
 
 
 # --- THE AGENT ---
@@ -157,7 +321,7 @@ class AgentError(Exception):
         self.steps = steps  # how many steps were used
 
 # Perform one call to the model
-def call_model(messages: list, step: int):
+def call_model(messages: list, step: int, language_hint: str | None = None):
     """Performs one step of the agent, which is exactly one call to the language model.
 
     Therefore the whole conversation (`messages`) is sent to the model together with the tool
@@ -179,14 +343,20 @@ def call_model(messages: list, step: int):
          - An empty answer: no tool calls and no text. Here the agent doesn't wait.
        Each case is logged as an event "model_error" with ok=false, the step number and the error.
 
-    3. Run cannot go on: this raises an AgentError("fatal_model_error"). This happens for FATAL_ERRORS, 
+    3. Run cannot go on: this raises an AgentError("fatal_model_error"). This happens for FATAL_ERRORS,
                          where every retry would fail the same way. The main() function logs it as "error" and exits with code 1.
+
+    If a language_hint is given, it is sent as the last message of this call only. It is not stored
+    in `messages`, so it never piles up and is always directly before the model's answer.
     """
     start = time.perf_counter()
+    request_messages = messages
+    if language_hint:
+        request_messages = messages + [{"role": "system", "content": language_hint}]
     try:
         # Execute the API request and save the response.
         response = client.chat.completions.create(
-            model=MODEL, messages=messages, tools=TOOLS, tool_choice="auto"
+            model=MODEL, messages=request_messages, tools=TOOLS, tool_choice="auto"
         )
     except FATAL_ERRORS as e:
         # A retry would not help here so the run should be ended.
@@ -226,7 +396,7 @@ def execute_tool(tc, step: int) -> dict:
     this error in the next step and can react to it, e.g. retry with a corrected date or tell the
     user that the data is unavailable. So a failing tool call never ends the run.
 
-    Note: a day without calendar data (HTTP 404) is not an error.
+    Note: a day or place without data (HTTP 404) is not an error, but a result with found=false.
     """
     # Try to read the arguments of the function and check if they are in the correct format.
     name = tc.function.name
@@ -265,6 +435,9 @@ def execute_tool(tc, step: int) -> dict:
 # Link the user's query, the language model, the calendar function and the response.
 def run(task: str) -> str:
     """Let the model work step by step until it answers by itself or MAX_STEPS is reached."""
+    # Detect the language of the question and choose the fixed sentence for it.
+    language = detect_language(task)
+    language_hint = LANGUAGE_HINTS.get(language)
     log("user_task", args={"task": task}) # task = user's question
 
     # Create the message for the language model.
@@ -273,14 +446,26 @@ def run(task: str) -> str:
         {
             "role": "system",
             "content": (
-                f"You are a calendar assistant. Today is {date.today().isoformat()}. "
+                f"You are a day and travel planner assistant. Today is {date.today().isoformat()}. "
+                "The user lives in Ulm. "
                 "For questions about appointments, always use the tool get_calendar_day, "
                 "once for every date the question is about. "
+                "For weather, use get_weather; for travel by train, use get_train_connections. "
+                "If a question needs several kinds of information, call every tool that is needed. "
                 "If a tool call fails, check the error and try again with corrected arguments. "
-                "Base your answer on the tool results, never invent appointments. "
+                "But if a date does not exist (e.g. 31 February), tell the user and do not "
+                "replace it with another date. "
+                "Base your answer only on the tool results, never invent appointments, weather, "
+                "trains or times, and do not use general knowledge to fill gaps. "
+                "Only mention details that are in the tool results: do not add stations "
+                "(e.g. main station), platforms, where to change trains or other facts that "
+                "are not in the data. "
+                "If a tool result has found=false, clearly say that there is no data for that "
+                "place or day, and answer the rest of the question with the data you do have. "
                 "When you have all the information you need, answer without calling any more tools. "
-                "Always reply in the same language as the user's question, even if the "
-                "calendar data is in another language."
+                "Language: write the whole answer in the language of the user's question. "
+                "The data is in German; if the question is in English, translate titles and "
+                "conditions into English and do not answer in German."
             ),
         },
         {"role": "user", "content": task},
@@ -289,7 +474,7 @@ def run(task: str) -> str:
     # Start a loop for multiple tool calls (max. MAX_STEPS).
     for step in range(1, MAX_STEPS + 1):
         # Call the language model
-        msg = call_model(messages, step)
+        msg = call_model(messages, step, language_hint)
         # If this step (model call) failed, the next step will try again.
         if msg is None:  
             continue

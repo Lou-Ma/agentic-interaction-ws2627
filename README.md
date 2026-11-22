@@ -54,6 +54,9 @@ DATA_BASE_URL=https://jhbelz.github.io/agentic-interaction-data/v1
 
 ```bash
 python -m agent "What is in the calendar on 29.10.2026?"
+python -m agent "How do I get to Munich on 29 Oct 2026, and do I need an umbrella?"
 ```
+
+The agent can read the calendar, the weather forecast and train connections from the mock data at `DATA_BASE_URL`. For places or days without data it says so instead of guessing.
 
 The answer is printed to standard output. Each run writes a log file to `logs/`.
